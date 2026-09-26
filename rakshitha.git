@@ -1,0 +1,274 @@
+PROFESSIONALS = [
+    {"id": "P001", "name": "Suresh Kumar", "trade": "plumber", "area": "Anna Nagar",
+     "rating": 4.8, "base_price": 300, "phone": "98xxxxx001"},
+    {"id": "P002", "name": "Ravi Electricals", "trade": "electrician", "area": "T Nagar",
+     "rating": 4.6, "base_price": 350, "phone": "98xxxxx002"},
+    {"id": "P003", "name": "Meena Cleaning Co.", "trade": "cleaner", "area": "Velachery",
+     "rating": 4.9, "base_price": 500, "phone": "98xxxxx003"},
+    {"id": "P004", "name": "AC Cool Care", "trade": "ac_repair", "area": "Adyar",
+     "rating": 4.5, "base_price": 450, "phone": "98xxxxx004"},
+    {"id": "P005", "name": "Ganesh Carpentry", "trade": "carpenter", "area": "Anna Nagar",
+     "rating": 4.7, "base_price": 400, "phone": "98xxxxx005"},
+    {"id": "P006", "name": "QuickFix Plumbing", "trade": "plumber", "area": "Velachery",
+     "rating": 4.3, "base_price": 280, "phone": "98xxxxx006"},
+]
+ 
+# In-memory "database" of bookings created during this session
+BOOKINGS = {}
+ 
+ 
+def search_professionals(trade: str, area: str = None, min_rating: float = 0.0):
+    """Find professionals matching a trade (and optionally area)."""
+    results = [
+        p for p in PROFESSIONALS
+        if p["trade"].lower() == trade.lower() and p["rating"] >= min_rating
+    ]
+    if area:
+        # simple substring match; a real system would use geo-distance
+        area_matches = [p for p in results if area.lower() in p["area"].lower()]
+        results = area_matches or results  # fall back to all if no area match
+    results.sort(key=lambda p: -p["rating"])
+    return results[:5]
+ 
+ 
+def check_availability(professional_id: str, preferred_date: str = None):
+    """
+    Mock calendar lookup. Returns a few upcoming free slots.
+    Replace with a real calendar/booking-system API call.
+    """
+    pro = next((p for p in PROFESSIONALS if p["id"] == professional_id), None)
+    if not pro:
+        return {"error": f"No professional with id {professional_id}"}
+ 
+    base_date = datetime.now()
+    if preferred_date:
+        try:
+            base_date = datetime.strptime(preferred_date, "%Y-%m-%d")
+        except ValueError:
+            pass
+ 
+    random.seed(professional_id)  # deterministic "randomness" per pro
+    slots = []
+    for day_offset in range(3):
+        day = base_date + timedelta(days=day_offset)
+        for hour in random.sample([9, 11, 14, 16, 18], k=2):
+            slots.append(day.replace(hour=hour, minute=0, second=0, microsecond=0)
+                         .strftime("%Y-%m-%d %H:%M"))
+    return {"professional_id": professional_id, "available_slots": sorted(slots)}
+ 
+ 
+def create_booking(professional_id: str, slot: str, customer_address: str,
+                    problem_description: str):
+    """
+    Creates a DRAFT booking (status=pending_approval). This does NOT
+    confirm anything with the professional yet — it just prepares the
+    booking so it can be shown to the customer for approval.
+    """
+    pro = next((p for p in PROFESSIONALS if p["id"] == professional_id), None)
+    if not pro:
+        return {"error": f"No professional with id {professional_id}"}
+ 
+    booking_id = f"BK-{uuid.uuid4().hex[:8].upper()}"
+    booking = {
+        "booking_id": booking_id,
+        "status": "pending_approval",
+        "professional": pro,
+        "slot": slot,
+        "customer_address": customer_address,
+        "problem_description": problem_description,
+        "estimated_price": pro["base_price"],
+    }
+    BOOKINGS[booking_id] = booking
+    return booking
+ 
+ 
+def confirm_booking(booking_id: str):
+    """
+    Finalizes a booking. Only works if the booking exists and is still
+    'pending_approval' — i.e. a draft was actually shown to the customer.
+    This is the hard programmatic gate that prevents the agent from
+    ever booking something the customer hasn't approved.
+    """
+    booking = BOOKINGS.get(booking_id)
+    if not booking:
+        return {"error": f"No such booking {booking_id}"}
+    if booking["status"] != "pending_approval":
+        return {"error": f"Booking {booking_id} is not awaiting approval "
+                          f"(status={booking['status']}); refusing to confirm."}
+ 
+    booking["status"] = "confirmed"
+    booking["confirmed_at"] = datetime.now().isoformat(timespec="seconds")
+    # Real system: notify the professional (SMS/push), charge/hold payment,
+    # send the customer a confirmation message, add to both calendars.
+    return booking
+ 
+ 
+
+ 
+TOOLS = [
+    {
+        "name": "search_professionals",
+        "description": "Search local professionals by trade/service type and area.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "trade": {"type": "string",
+                          "description": "e.g. plumber, electrician, cleaner, ac_repair, carpenter"},
+                "area": {"type": "string", "description": "Neighbourhood/locality, if known"},
+                "min_rating": {"type": "number", "description": "Minimum star rating, default 0"},
+            },
+            "required": ["trade"],
+        },
+    },
+    {
+        "name": "check_availability",
+        "description": "Check a specific professional's open time slots.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "professional_id": {"type": "string"},
+                "preferred_date": {"type": "string",
+                                    "description": "YYYY-MM-DD, optional"},
+            },
+            "required": ["professional_id"],
+        },
+    },
+    {
+        "name": "create_booking",
+        "description": (
+            "Create a DRAFT booking for the customer to review. This does "
+            "NOT confirm the booking. After calling this, present the "
+            "details to the customer in plain text and explicitly ask "
+            "for their approval before ever calling confirm_booking."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "professional_id": {"type": "string"},
+                "slot": {"type": "string", "description": "Chosen slot, YYYY-MM-DD HH:MM"},
+                "customer_address": {"type": "string"},
+                "problem_description": {"type": "string"},
+            },
+            "required": ["professional_id", "slot", "customer_address", "problem_description"],
+        },
+    },
+    {
+        "name": "confirm_booking",
+        "description": (
+            "Finalize a booking. ONLY call this after the customer has "
+            "clearly said yes/confirm/go ahead to a draft you already "
+            "showed them in a previous message. Never call this in the "
+            "same turn as create_booking."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {"booking_id": {"type": "string"}},
+            "required": ["booking_id"],
+        },
+    },
+]
+ 
+TOOL_IMPL = {
+    "search_professionals": search_professionals,
+    "check_availability": check_availability,
+    "create_booking": create_booking,
+    "confirm_booking": confirm_booking,
+}
+ 
+SYSTEM_PROMPT = """You are Karigar AI, a friendly local home-services booking
+assistant. Customers describe a problem (leaky tap, fan not working, house
+needs cleaning, AC servicing, etc). Your job, in order:
+ 
+1. Understand the problem: figure out the trade needed (plumber, electrician,
+   cleaner, ac_repair, carpenter, etc), urgency, and locality. Ask a brief
+   clarifying question ONLY if something essential is missing (e.g. area or
+   address). Don't interrogate the customer — infer what you reasonably can.
+2. Use search_professionals to find good matches (prefer higher ratings).
+   Present 1-3 options briefly.
+3. Once the customer picks one (or you pick the best match if they say
+   "you choose"), use check_availability to find real open slots and let
+   the customer pick a time.
+4. Use create_booking to prepare a draft. Then, in plain text, show the
+   customer a clear summary: professional name, trade, time slot, address,
+   estimated price, and ask "Shall I confirm this booking?" or similar.
+   Do NOT call confirm_booking in this same turn.
+5. Only after the customer explicitly approves in a LATER message
+   (e.g. "yes", "confirm", "go ahead", "book it") should you call
+   confirm_booking with that booking_id. If they want changes instead,
+   create a new draft.
+6. If the customer declines or wants something else, do not confirm
+   anything — adjust and re-draft as needed.
+ 
+Keep responses concise, warm, and practical. Always state prices and times
+clearly. Never invent professionals, prices, or slots — only use data
+returned by the tools.
+"""
+ 
+ 
+
+ 
+class KarigarAgent:
+    def __init__(self):
+        self.client = anthropic.Anthropic()  # reads ANTHROPIC_API_KEY from env
+        self.history = []
+ 
+    def send(self, user_text: str) -> str:
+        self.history.append({"role": "user", "content": user_text})
+ 
+        while True:
+            response = self.client.messages.create(
+                model=MODEL,
+                max_tokens=1024,
+                system=SYSTEM_PROMPT,
+                tools=TOOLS,
+                messages=self.history,
+            )
+ 
+            self.history.append({"role": "assistant", "content": response.content})
+ 
+            if response.stop_reason != "tool_use":
+                # Final text reply for this turn — return it to the user.
+                return "".join(
+                    block.text for block in response.content if block.type == "text"
+                )
+ 
+            # Execute every tool call Claude asked for, then loop back.
+            tool_results = []
+            for block in response.content:
+                if block.type != "tool_use":
+                    continue
+                func = TOOL_IMPL.get(block.name)
+                try:
+                    result = func(**block.input) if func else {"error": "unknown tool"}
+                except Exception as e:  # keep the agent alive on bad tool args
+                    result = {"error": str(e)}
+ 
+                tool_results.append({
+                    "type": "tool_result",
+                    "tool_use_id": block.id,
+                    "content": json.dumps(result, default=str),
+                })
+ 
+            self.history.append({"role": "user", "content": tool_results})
+ 
+ 
+ 
+def main():
+    if not os.environ.get("ANTHROPIC_API_KEY"):
+        print("Set ANTHROPIC_API_KEY in your environment first.")
+        return
+ 
+    agent = KarigarAgent()
+    print("Karigar AI 🛠️  — describe your home-service problem (type 'exit' to quit)\n")
+ 
+    while True:
+        user_text = input("You: ").strip()
+        if user_text.lower() in {"exit", "quit"}:
+            break
+        reply = agent.send(user_text)
+        print(f"\nKarigar AI: {reply}\n")
+ 
+ 
+if __name__ == "__main__":
+    main()
+ 
